@@ -1,35 +1,30 @@
 # Photo Grid
 
-A small web app for arranging photos in a grid on a page and printing it. It's built for iPhone Safari and works in any modern browser.
+A simple web app for putting several photos on one page and printing it. It's made for use on a phone.
 
-There is no build step and there are no dependencies: plain HTML, CSS and ES modules.
+**Open it:** https://artmerenfeld.github.io/simple-editor/
 
-## Using it
+## What it does
 
-1. Tap **Add photos** (or any empty cell) and pick photos.
-2. **Layout** tab: choose a preset. **Auto** picks a grid based on how many photos there are. Extra photos go onto more pages.
-3. **Page** tab: A4 or Letter, portrait or landscape, gap, margin, rounded corners and background color.
-4. Tap a photo to edit it. Drag to move it, pinch or use the slider to zoom. You can also **Rotate**, switch between **Show all** and **Fill cell**, **Swap** it with another photo, **Replace** it or **Remove** it.
-5. **Print or save** lets you print directly (AirPrint), save the page as an image to Photos, or share a PDF.
+- Pick photos from your phone and they're laid out in a grid
+- Ready-made layouts: 1, 2, 4, 6, 9, 12 or 20 photos, plus a few with one large photo
+- A4 or Letter, portrait or landscape
+- Adjust the spacing, margins, rounded corners and background color
+- Tap a photo to move, zoom, rotate, swap, replace or remove it
+- Print it, save it as an image, or share it as a PDF
 
-Work is saved in the browser automatically, so it's still there after the tab reloads.
+## Privacy
 
-On iPhone, use Safari: tap Share, then **Add to Home Screen**, and it opens like an app.
+Photos never leave the device. Everything happens in the browser. Nothing is uploaded, and there's no tracking.
+
+## Tip
+
+On iPhone, open the link in Safari, then tap Share → **Add to Home Screen** to use it like an app.
 
 ## Running locally
 
+No build step. Serve the folder with any static server:
+
 ```sh
 python -m http.server 8000
-# open http://localhost:8000
 ```
-
-## Code layout
-
-| File | Role |
-|---|---|
-| `js/layouts.js` | Paper sizes, layout presets, and cell geometry (mm) |
-| `js/render.js` | One canvas renderer used for the preview, printing and export |
-| `js/images.js` | Photo import, downscaled to a 2048 px long edge to keep iPhone memory low |
-| `js/store.js` | State plus IndexedDB persistence |
-| `js/output.js` | 300 DPI page rendering, print, image and PDF export |
-| `js/main.js` | UI and touch gestures |
