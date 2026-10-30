@@ -2,10 +2,12 @@ import { LAYOUTS, PAPER, pageSize, resolveLayout, cellRects } from './layouts.js
 import { pageModel, drawPage, placement } from './render.js';
 import { downscale, photoFromBlob, releasePhoto } from './images.js';
 import {
-  state, DEFAULTS, MAX_PHOTOS, subscribe, changed, set,
-  saveBlob, deleteBlob, clearSaved, loadSaved, persistNow,
+  state, MODES, subscribe, changed, set, switchMode, restore,
+  saveBlob, deleteBlobs, loadSaved, persistNow,
 } from './store.js';
-import { renderPages, preparePrint, buildPdf, shareFiles } from './output.js';
+import {
+  renderPages, preparePrint, clearPrint, buildPdf, shareFiles, Cancelled, DIRECT_PRINT_MAX_PAGES,
+} from './output.js';
 
 const $ = (id) => document.getElementById(id);
 const clamp = (v, lo, hi) => Math.min(hi, Math.max(lo, v));
@@ -50,7 +52,7 @@ function draw() {
     canvas.style.height = `${cssH}px`;
   }
   ctx.setTransform(1, 0, 0, 1, 0, 0);
-  drawPage(ctx, state, model, ui.page, pxW / model.page.w, { selectedId: ui.selectedId, swapping: ui.swapping, dpr });
+  drawPage(ctx, state, model, ui.page, pxW / model.page.w, { ui: { selectedId: ui.selectedId, swapping: ui.swapping, dpr } });
   updateControls();
 }
 
@@ -96,19 +98,30 @@ function updateLayoutStrip() {
       item.btn.querySelector('.thumb').innerHTML = thumbSvg(spec, page);
       item.key = key;
     }
+    item.btn.hidden = state.mode === 'batch' && !item.layout.batch;
     setPressed(item.btn, item.layout.id === state.layoutId);
   }
+}
+
+function updatePager() {
+  const batch = state.mode === 'batch';
+  const count = state.photos.length;
+  // Batch always shows this line, so the preview doesn't jump as photos arrive.
+  $('pager').hidden = !batch && model.pageCount < 2;
+  let label = `Page ${ui.page + 1} of ${model.pageCount}`;
+  if (batch) label = count ? `${label} · ${count} photo${count > 1 ? 's' : ''}` : 'Choose photos per page, then tap Add';
+  $('pager-label').textContent = label;
+  for (const id of ['btn-prev', 'btn-next']) $(id).style.visibility = model.pageCount > 1 ? '' : 'hidden';
+  $('btn-prev').disabled = ui.page === 0;
+  $('btn-next').disabled = ui.page >= model.pageCount - 1;
 }
 
 function updateControls() {
   const photo = selectedPhoto();
   $('panel-main').hidden = !!photo;
   $('panel-photo').hidden = !photo;
-
-  $('pager').hidden = model.pageCount < 2;
-  $('pager-label').textContent = `Page ${ui.page + 1} of ${model.pageCount}`;
-  $('btn-prev').disabled = ui.page === 0;
-  $('btn-next').disabled = ui.page >= model.pageCount - 1;
+  document.querySelectorAll('[data-mode]').forEach((b) => setPressed(b, b.dataset.mode === state.mode));
+  updatePager();
   $('btn-output').disabled = state.photos.length === 0;
 
   if (photo) {
@@ -123,7 +136,7 @@ function updateControls() {
   }
 
   updateLayoutStrip();
-  document.querySelectorAll('.segmented').forEach((group) => {
+  document.querySelectorAll('.segmented[data-setting]').forEach((group) => {
     group.querySelectorAll('button').forEach((b) => setPressed(b, state[group.dataset.setting] === b.dataset.value));
   });
   document.querySelectorAll('input[type="range"][data-setting]').forEach((input) => {
@@ -193,27 +206,42 @@ function openPicker(mode) {
   input.click();
 }
 
+let storageWarned = false;
+
 async function importFile(file) {
-  const blob = await downscale(file);
-  const photo = await photoFromBlob(blob);
-  await saveBlob(photo.id, blob);
+  const mode = MODES[state.mode];
+  const blob = await downscale(file, mode.maxEdge);
+  const photo = await photoFromBlob(blob, { fit: mode.fit });
+  if (!(await saveBlob(photo.id, blob)) && !storageWarned) {
+    storageWarned = true;
+    toast("Phone storage is full: these photos won't be kept after closing");
+  }
   return photo;
 }
 
 async function addFiles(files) {
-  const room = MAX_PHOTOS - state.photos.length;
+  const max = MODES[state.mode].maxPhotos;
+  const room = max - state.photos.length;
   if (room <= 0) {
-    toast(`You can add up to ${MAX_PHOTOS} photos`);
+    toast(`You can add up to ${max} photos`);
     return;
   }
   const list = files.slice(0, room);
   const firstNew = state.photos.length;
+  const job = { cancelled: false };
   let failed = 0;
-  showSheet({ title: 'Adding photos', spinner: true, dismissible: false });
-  for (let i = 0; i < list.length; i++) {
+  let added = 0;
+  showSheet({
+    title: 'Adding photos',
+    spinner: true,
+    dismissible: false,
+    actions: list.length > 1 ? [{ label: 'Stop', onClick: () => { job.cancelled = true; setSheetText('Stopping…'); } }] : [],
+  });
+  for (let i = 0; i < list.length && !job.cancelled; i++) {
     setSheetText(list.length > 1 ? `${i + 1} of ${list.length}` : '');
     try {
       state.photos.push(await importFile(list[i]));
+      added++;
       changed();
     } catch (err) {
       console.warn('Import failed', err);
@@ -225,7 +253,8 @@ async function addFiles(files) {
   ui.page = Math.floor(firstNew / pageModel(state).perPage);
   requestDraw();
   if (failed) toast(`${failed} photo${failed > 1 ? 's' : ''} couldn't be opened`);
-  else if (files.length > room) toast(`Added ${list.length}. The limit is ${MAX_PHOTOS} photos.`);
+  else if (job.cancelled) toast(`Added ${added} photo${added === 1 ? '' : 's'}`);
+  else if (files.length > room) toast(`Added ${list.length}. The limit is ${max} photos.`);
 }
 
 async function replaceSelected(file) {
@@ -237,7 +266,7 @@ async function replaceSelected(file) {
     const index = state.photos.indexOf(old);
     if (index < 0) return;
     state.photos[index] = photo;
-    deleteBlob(old.id);
+    deleteBlobs([old.id]);
     releasePhoto(old);
     ui.selectedId = photo.id;
     changed();
@@ -253,7 +282,7 @@ function removeSelected() {
   const photo = selectedPhoto();
   if (!photo) return;
   state.photos.splice(state.photos.indexOf(photo), 1);
-  deleteBlob(photo.id);
+  deleteBlobs([photo.id]);
   releasePhoto(photo);
   ui.selectedId = null;
   ui.swapping = false;
@@ -268,22 +297,25 @@ function editSelected(fn) {
 }
 
 function startOver() {
+  const name = state.mode === 'batch' ? 'Batch' : 'Collage';
+  const other = state.mode === 'batch' ? 'Collage' : 'Batch';
   showSheet({
     title: 'Start over?',
-    text: 'This removes all photos. Your page settings stay the same.',
+    text: `This removes all photos from ${name}. ${other} and your page settings stay the same.`,
     actions: [
       {
         label: 'Remove all photos',
         kind: 'danger',
-        onClick: async () => {
+        onClick: () => {
           closeSheet();
+          const ids = state.photos.map((p) => p.id);
           state.photos.forEach(releasePhoto);
           state.photos = [];
           ui.selectedId = null;
           ui.swapping = false;
           ui.page = 0;
-          await clearSaved();
           changed();
+          deleteBlobs(ids);
         },
       },
       { label: 'Cancel', onClick: closeSheet },
@@ -296,29 +328,49 @@ function startOver() {
 async function openOutput() {
   if (!state.photos.length) return;
   select(null);
-  showSheet({ title: 'Getting your page ready…', spinner: true, dismissible: false });
+  const job = { cancelled: false };
+  showSheet({
+    title: 'Getting your pages ready…',
+    spinner: true,
+    dismissible: false,
+    actions: [{ label: 'Cancel', onClick: () => { job.cancelled = true; closeSheet(); } }],
+  });
   try {
-    const rendered = await renderPages(state, (i, n) => setSheetText(n > 1 ? `Page ${i} of ${n}` : ''));
-    await preparePrint(rendered, state);
+    const rendered = await renderPages(state, {
+      dpi: MODES[state.mode].dpi,
+      job,
+      onProgress: (i, n) => setSheetText(n > 1 ? `Page ${i} of ${n}` : ''),
+    });
     const count = rendered.pages.length;
-    const pdf = new File([await buildPdf(rendered)], 'photo-grid.pdf', { type: 'application/pdf' });
+    const direct = count <= DIRECT_PRINT_MAX_PAGES;
+    if (direct) await preparePrint(rendered, state);
+    else clearPrint();
+    if (job.cancelled) return;
+
+    const pdf = new File([buildPdf(rendered)], 'photo-grid.pdf', { type: 'application/pdf' });
     const images = rendered.pages.map((blob, i) =>
       new File([blob], count > 1 ? `photo-grid-${i + 1}.jpg` : 'photo-grid.jpg', { type: 'image/jpeg' }));
     const afterShare = (result) => {
       if (result === 'shared') closeSheet();
       if (result === 'downloaded') toast('Saved to your downloads');
     };
+    const sharePdf = () => shareFiles([pdf]).then(afterShare);
+    const actions = direct
+      ? [{ label: 'Print', kind: 'primary', onClick: () => { closeSheet(); window.print(); } }, { label: 'Share as PDF', onClick: sharePdf }]
+      : [{ label: 'Print or save PDF', kind: 'primary', onClick: sharePdf }];
+    actions.push(
+      { label: count > 1 ? `Save ${count} images` : 'Save image', onClick: () => shareFiles(images).then(afterShare) },
+      { label: 'Cancel', onClick: closeSheet },
+    );
     showSheet({
       title: count > 1 ? `Ready · ${count} pages` : 'Ready',
-      text: `${state.paper}, ${state.orientation}`,
-      actions: [
-        { label: 'Print', kind: 'primary', onClick: () => { closeSheet(); window.print(); } },
-        { label: count > 1 ? 'Save images' : 'Save image', onClick: () => shareFiles(images).then(afterShare) },
-        { label: 'Share as PDF', onClick: () => shareFiles([pdf]).then(afterShare) },
-        { label: 'Cancel', onClick: closeSheet },
-      ],
+      text: direct
+        ? `${state.paper}, ${state.orientation}`
+        : `${state.paper}, ${state.orientation}. In the menu that opens, choose Print, or Save to Files.`,
+      actions,
     });
   } catch (err) {
+    if (err instanceof Cancelled) return;
     console.error('Output failed', err);
     showSheet({
       title: 'Something went wrong',
@@ -471,7 +523,16 @@ document.querySelectorAll('[role="tab"]').forEach((tab) => {
   });
 });
 
-document.querySelectorAll('.segmented').forEach((group) => {
+$('mode').addEventListener('click', (e) => {
+  const btn = e.target.closest('button');
+  if (!btn || btn.dataset.mode === state.mode) return;
+  ui.selectedId = null;
+  ui.swapping = false;
+  ui.page = 0;
+  switchMode(btn.dataset.mode);
+});
+
+document.querySelectorAll('.segmented[data-setting]').forEach((group) => {
   group.addEventListener('click', (e) => {
     const btn = e.target.closest('button');
     if (btn) set({ [group.dataset.setting]: btn.dataset.value });
@@ -521,28 +582,40 @@ subscribe(requestDraw);
 
 // --- Start --------------------------------------------------------------------------
 
-function applySettings(saved) {
-  if (saved.paper in PAPER) state.paper = saved.paper;
-  if (saved.orientation === 'portrait' || saved.orientation === 'landscape') state.orientation = saved.orientation;
-  if (LAYOUTS.some((l) => l.id === saved.layoutId)) state.layoutId = saved.layoutId;
+function validSettings(saved, mode) {
+  const s = { ...MODES[mode].defaults };
+  if (saved.paper in PAPER) s.paper = saved.paper;
+  if (saved.orientation === 'portrait' || saved.orientation === 'landscape') s.orientation = saved.orientation;
+  if (LAYOUTS.some((l) => l.id === saved.layoutId && (mode !== 'batch' || l.batch))) s.layoutId = saved.layoutId;
   for (const key of ['gapMm', 'marginMm', 'radiusMm']) {
-    if (Number.isFinite(saved[key])) state[key] = saved[key];
+    if (Number.isFinite(saved[key])) s[key] = saved[key];
   }
-  if (typeof saved.bg === 'string') state.bg = saved.bg;
+  if (typeof saved.bg === 'string') s.bg = saved.bg;
+  return s;
+}
+
+async function restorePhotos(items) {
+  const photos = [];
+  for (let i = 0; i < items.length; i += 20) {
+    const loaded = await Promise.all(items.slice(i, i + 20).map(({ meta, blob }) =>
+      photoFromBlob(blob, meta).catch((err) => console.warn('Could not restore a photo', err))));
+    photos.push(...loaded.filter(Boolean));
+  }
+  return photos;
 }
 
 async function boot() {
   requestDraw();
   const saved = await loadSaved();
   if (saved) {
-    applySettings({ ...DEFAULTS, ...saved.settings });
-    for (const { meta, blob } of saved.photos) {
-      try {
-        state.photos.push(await photoFromBlob(blob, meta));
-      } catch (err) {
-        console.warn('Could not restore a photo', err);
-      }
+    const total = Object.values(saved.workspaces).reduce((n, ws) => n + ws.photos.length, 0);
+    if (total > 40) showSheet({ title: 'Loading your photos…', spinner: true, dismissible: false });
+    const workspaces = {};
+    for (const [mode, ws] of Object.entries(saved.workspaces)) {
+      workspaces[mode] = { ...validSettings(ws.settings, mode), photos: await restorePhotos(ws.photos) };
     }
+    restore(saved.mode, workspaces);
+    closeSheet();
     requestDraw();
   }
   if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});

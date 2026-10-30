@@ -1,6 +1,5 @@
 // Photo import. Phone photos are huge, so each is downscaled once to keep memory low.
 
-const MAX_EDGE = 2048; // ~250 DPI across a full A4 page
 const JPEG_QUALITY = 0.9;
 
 function loadImage(src) {
@@ -17,11 +16,11 @@ function newId() {
 }
 
 /** Decode a picked file and re-encode it as a modest JPEG (EXIF rotation baked in). */
-export async function downscale(file) {
+export async function downscale(file, maxEdge) {
   const url = URL.createObjectURL(file);
   try {
     const src = await loadImage(url);
-    const scale = Math.min(1, MAX_EDGE / Math.max(src.naturalWidth, src.naturalHeight));
+    const scale = Math.min(1, maxEdge / Math.max(src.naturalWidth, src.naturalHeight));
     const w = Math.max(1, Math.round(src.naturalWidth * scale));
     const h = Math.max(1, Math.round(src.naturalHeight * scale));
     const canvas = document.createElement('canvas');
@@ -58,6 +57,7 @@ export async function photoFromBlob(blob, meta = {}) {
       h: img.naturalHeight,
       img,
       url,
+      blob, // kept for output, which decodes each page's photos only while drawing it
     };
   } catch (err) {
     URL.revokeObjectURL(url);

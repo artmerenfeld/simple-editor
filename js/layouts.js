@@ -19,15 +19,16 @@ function grid(cols, rows) {
 }
 
 // Specs are written for portrait pages and transposed for landscape.
+// `batch` marks the plain grids offered in Batch mode.
 export const LAYOUTS = [
   { id: 'auto', name: 'Auto' },
-  { id: 'single', name: 'Single', ...grid(1, 1) },
-  { id: 'two', name: '2 photos', ...grid(1, 2) },
-  { id: 'g4', name: '4 grid', ...grid(2, 2) },
-  { id: 'g6', name: '6 grid', ...grid(2, 3) },
-  { id: 'g9', name: '9 grid', ...grid(3, 3) },
-  { id: 'g12', name: '12 grid', ...grid(3, 4) },
-  { id: 'g20', name: '20 small', ...grid(4, 5) },
+  { id: 'single', name: 'Single', batch: true, ...grid(1, 1) },
+  { id: 'two', name: '2 photos', batch: true, ...grid(1, 2) },
+  { id: 'g4', name: '4 grid', batch: true, ...grid(2, 2) },
+  { id: 'g6', name: '6 grid', batch: true, ...grid(2, 3) },
+  { id: 'g9', name: '9 grid', batch: true, ...grid(3, 3) },
+  { id: 'g12', name: '12 grid', batch: true, ...grid(3, 4) },
+  { id: 'g20', name: '20 small', batch: true, ...grid(4, 5) },
   {
     id: 'hero2', name: 'Big + 2', cols: 2, rows: 3,
     cells: [{ c: 0, r: 0, cs: 2, rs: 2 }, { c: 0, r: 2, cs: 1, rs: 1 }, { c: 1, r: 2, cs: 1, rs: 1 }],

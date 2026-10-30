@@ -2,35 +2,65 @@
 import { PAPER } from './layouts.js';
 import { pageModel, drawPage } from './render.js';
 
-const DPI = 300;
 const JPEG_QUALITY = 0.92;
 const PT_PER_MM = 72 / 25.4;
+
+// Above this many pages, printing straight from the browser needs too much memory on a
+// phone (every page has to be decoded at once), so the PDF is offered for printing instead.
+export const DIRECT_PRINT_MAX_PAGES = 6;
+
+export class Cancelled extends Error {}
 
 function toBlob(canvas, type, quality) {
   return new Promise((resolve, reject) =>
     canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not create image'))), type, quality));
 }
 
-/** Render every page to a JPEG blob at 300 DPI. */
-export async function renderPages(state, onProgress) {
+/** Decode just one page's photos; the caller closes them once the page is drawn. */
+async function decodePhotos(photos) {
+  const images = new Map();
+  if (!window.createImageBitmap) return images; // fall back to photo.img
+  for (const photo of photos) {
+    try {
+      images.set(photo.id, await createImageBitmap(photo.blob));
+    } catch (err) {
+      console.warn('Decode failed, using preview image', err);
+    }
+  }
+  return images;
+}
+
+/**
+ * Render every page to a JPEG blob at `dpi`.
+ * Set job.cancelled = true to stop; the promise then rejects with Cancelled.
+ */
+export async function renderPages(state, { dpi = 300, onProgress, job = {} } = {}) {
   const model = pageModel(state);
-  const pxPerMm = DPI / 25.4;
+  const pxPerMm = dpi / 25.4;
+  const widthPx = Math.round(model.page.w * pxPerMm);
+  const heightPx = Math.round(model.page.h * pxPerMm);
   const canvas = document.createElement('canvas');
-  canvas.width = Math.round(model.page.w * pxPerMm);
-  canvas.height = Math.round(model.page.h * pxPerMm);
+  canvas.width = widthPx;
+  canvas.height = heightPx;
   const ctx = canvas.getContext('2d');
   ctx.imageSmoothingQuality = 'high';
   const pages = [];
   try {
     for (let i = 0; i < model.pageCount; i++) {
+      if (job.cancelled) throw new Cancelled();
       if (onProgress) onProgress(i + 1, model.pageCount);
-      drawPage(ctx, state, model, i, pxPerMm);
+      const images = await decodePhotos(state.photos.slice(i * model.perPage, (i + 1) * model.perPage));
+      try {
+        drawPage(ctx, state, model, i, pxPerMm, { images });
+      } finally {
+        images.forEach((bitmap) => bitmap.close && bitmap.close());
+      }
       pages.push(await toBlob(canvas, 'image/jpeg', JPEG_QUALITY));
     }
   } finally {
     canvas.width = canvas.height = 0;
   }
-  return { pages, page: model.page, widthPx: Math.round(model.page.w * pxPerMm), heightPx: Math.round(model.page.h * pxPerMm) };
+  return { pages, page: model.page, widthPx, heightPx };
 }
 
 // --- Print -------------------------------------------------------------------
@@ -64,15 +94,16 @@ export async function preparePrint(rendered, state) {
 // --- PDF ---------------------------------------------------------------------
 
 /** A minimal PDF with one full-page JPEG per page. */
-export async function buildPdf(rendered) {
+export function buildPdf(rendered) {
   const enc = new TextEncoder();
   const chunks = [];
   const offsets = [];
   let length = 0;
+  // Page JPEGs go in as Blob parts, so they are referenced rather than copied.
   const push = (data) => {
-    const bytes = typeof data === 'string' ? enc.encode(data) : data;
-    chunks.push(bytes);
-    length += bytes.length;
+    const part = typeof data === 'string' ? enc.encode(data) : data;
+    chunks.push(part);
+    length += part instanceof Blob ? part.size : part.length;
   };
   const obj = (n, ...body) => {
     offsets[n] = length;
@@ -93,13 +124,13 @@ export async function buildPdf(rendered) {
     const pageN = 3 + i * 3;
     const contentN = pageN + 1;
     const imageN = pageN + 2;
-    const jpeg = new Uint8Array(await rendered.pages[i].arrayBuffer());
+    const jpeg = rendered.pages[i];
     const content = `q ${pw} 0 0 ${ph} 0 0 cm /Im0 Do Q`;
     obj(pageN, `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${pw} ${ph}] ` +
       `/Resources << /XObject << /Im0 ${imageN} 0 R >> >> /Contents ${contentN} 0 R >>`);
     obj(contentN, `<< /Length ${content.length} >>\nstream\n${content}\nendstream`);
     obj(imageN, `<< /Type /XObject /Subtype /Image /Width ${rendered.widthPx} /Height ${rendered.heightPx} ` +
-      `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.length} >>\nstream\n`, jpeg, '\nendstream');
+      `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${jpeg.size} >>\nstream\n`, jpeg, '\nendstream');
   }
 
   const total = 3 + count * 3;

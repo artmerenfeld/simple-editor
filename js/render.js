@@ -27,7 +27,9 @@ export function placement(photo, rect) {
   // How far the photo may slide each way from centre before showing an edge.
   const ox = Math.max(0, (dw - rect.w) / 2);
   const oy = Math.max(0, (dh - rect.h) / 2);
-  return { scale, ox, oy };
+  const cx = rect.x + rect.w / 2 + photo.panX * ox;
+  const cy = rect.y + rect.h / 2 + photo.panY * oy;
+  return { scale, ox, oy, cx, cy, dw, dh };
 }
 
 function roundedRect(ctx, x, y, w, h, r) {
@@ -45,18 +47,27 @@ function roundedRect(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
-function drawPhoto(ctx, photo, rect) {
-  const { scale, ox, oy } = placement(photo, rect);
-  ctx.translate(rect.x + rect.w / 2 + photo.panX * ox, rect.y + rect.h / 2 + photo.panY * oy);
+function drawPhoto(ctx, photo, source, rect, radius) {
+  const { scale, cx, cy, dw, dh } = placement(photo, rect);
+  // Clip to the visible part of the photo, so rounded corners also apply when
+  // the whole photo is shown with blank space around it.
+  const x0 = Math.max(rect.x, cx - dw / 2);
+  const y0 = Math.max(rect.y, cy - dh / 2);
+  const x1 = Math.min(rect.x + rect.w, cx + dw / 2);
+  const y1 = Math.min(rect.y + rect.h, cy + dh / 2);
+  roundedRect(ctx, x0, y0, x1 - x0, y1 - y0, radius);
+  ctx.clip();
+  ctx.translate(cx, cy);
   ctx.rotate((photo.rotation * Math.PI) / 180);
   const w = photo.w * scale;
   const h = photo.h * scale;
-  ctx.drawImage(photo.img, -w / 2, -h / 2, w, h);
+  ctx.drawImage(source, -w / 2, -h / 2, w, h);
 }
 
-function drawPlaceholder(ctx, rect, dpr) {
+function drawPlaceholder(ctx, rect, radius, dpr) {
+  roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, radius);
   ctx.fillStyle = 'rgba(128,128,128,0.14)';
-  ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+  ctx.fill();
   const s = Math.min(rect.w, rect.h, 120 * dpr) * 0.18;
   ctx.strokeStyle = 'rgba(128,128,128,0.7)';
   ctx.lineWidth = Math.max(1.5 * dpr, s * 0.12);
@@ -73,9 +84,11 @@ function drawPlaceholder(ctx, rect, dpr) {
 
 /**
  * Draw one page onto ctx, scaled at pxPerMm.
- * Pass `ui` ({ selectedId, swapping, dpr }) for the interactive preview; omit it for output.
+ * Options:
+ *   ui     – { selectedId, swapping, dpr } for the interactive preview; omit for output.
+ *   images – Map of photo id → decoded image to draw instead of photo.img.
  */
-export function drawPage(ctx, state, model, pageIndex, pxPerMm, ui = null) {
+export function drawPage(ctx, state, model, pageIndex, pxPerMm, { ui = null, images = null } = {}) {
   const { page, rects, perPage } = model;
   const radius = state.radiusMm * pxPerMm;
 
@@ -86,12 +99,11 @@ export function drawPage(ctx, state, model, pageIndex, pxPerMm, ui = null) {
   rects.forEach((mm, i) => {
     const rect = { x: mm.x * pxPerMm, y: mm.y * pxPerMm, w: mm.w * pxPerMm, h: mm.h * pxPerMm };
     const photo = state.photos[pageIndex * perPage + i];
+    const source = photo && ((images && images.get(photo.id)) || photo.img);
 
     ctx.save();
-    roundedRect(ctx, rect.x, rect.y, rect.w, rect.h, radius);
-    ctx.clip();
-    if (photo) drawPhoto(ctx, photo, rect);
-    else if (ui) drawPlaceholder(ctx, rect, ui.dpr);
+    if (source) drawPhoto(ctx, photo, source, rect, radius);
+    else if (ui) drawPlaceholder(ctx, rect, radius, ui.dpr);
     ctx.restore();
 
     if (ui && photo && photo.id === ui.selectedId) {

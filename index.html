@@ -21,10 +21,13 @@
       <button id="btn-new" class="icon-btn" type="button" aria-label="Start over" title="Start over">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 12a8 8 0 1 0 2.4-5.7M4 4v4h4"/></svg>
       </button>
-      <h1>Photo Grid</h1>
+      <div id="mode" class="segmented mode-switch" role="group" aria-label="Mode">
+        <button type="button" data-mode="collage">Collage</button>
+        <button type="button" data-mode="batch">Batch</button>
+      </div>
       <button id="btn-add" class="btn btn-small" type="button">
         <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
-        Add photos
+        Add
       </button>
     </header>
 

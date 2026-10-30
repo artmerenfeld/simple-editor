@@ -13,6 +13,8 @@ A simple web app for putting several photos on one page and printing it. It's ma
 - Tap a photo to move, zoom, rotate, swap, replace or remove it
 - Print it, save it as an image, or share it as a PDF
 
+**Batch mode** is for lots of photos. Choose how many go on each page (for example 6), then add up to 300 photos. They're placed in order across as many pages as needed, and you get one PDF ready to print.
+
 ## Privacy
 
 Photos never leave the device. Everything happens in the browser. Nothing is uploaded, and there's no tracking.
